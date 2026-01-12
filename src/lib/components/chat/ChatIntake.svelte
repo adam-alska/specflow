@@ -21,6 +21,63 @@
   let streamingContent = $state('')
   let currentSuggestions = $state<string[]>([])
 
+  // Target repo state (for forking/context)
+  let targetRepoUrl = $state('')
+  let targetRepoInfo = $state<{ name: string; description: string; files: string[] } | null>(null)
+  let isLoadingRepo = $state(false)
+  let repoError = $state('')
+
+  async function forkAndAnalyzeRepo(repoUrl: string) {
+    if (!repoUrl.includes('github.com')) {
+      repoError = 'Please enter a valid GitHub URL'
+      return
+    }
+
+    isLoadingRepo = true
+    repoError = ''
+
+    try {
+      // First fork the repo
+      const forkRes = await fetch('/api/github', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoUrl, action: 'fork' })
+      })
+      const forkData = await forkRes.json()
+
+      if (!forkData.success) {
+        throw new Error(forkData.error || 'Failed to fork repository')
+      }
+
+      // Then analyze it
+      const analyzeRes = await fetch('/api/github', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoUrl: forkData.forkedUrl, action: 'analyze' })
+      })
+      const analyzeData = await analyzeRes.json()
+
+      if (analyzeData.success) {
+        targetRepoInfo = {
+          name: analyzeData.info?.name || forkData.forkedRepo,
+          description: analyzeData.info?.description || '',
+          files: analyzeData.files || []
+        }
+      }
+
+      // Store repo info on ticket
+      tickets.update(ticketId, {
+        targetRepo: forkData.forkedUrl,
+        originalRepo: repoUrl
+      })
+
+    } catch (err) {
+      repoError = (err as Error).message
+    } finally {
+      isLoadingRepo = false
+    }
+  }
+
   // Helper to strip [chip]...[/chip] tags from displayed text
   function stripChipTags(text: string): string {
     return text.replace(/\[chip\].*?\[\/chip\]/g, '').replace(/\s{2,}/g, ' ').trim()
@@ -219,7 +276,12 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: aiMessages,
-          sessionId: ticketId  // Use ticketId as session for memory persistence
+          sessionId: ticketId,  // Use ticketId as session for memory persistence
+          targetRepo: targetRepoInfo ? {
+            name: targetRepoInfo.name,
+            description: targetRepoInfo.description,
+            files: targetRepoInfo.files.slice(0, 50)  // Limit to 50 files for context
+          } : null
         })
       })
 
@@ -704,6 +766,9 @@ ${previewSpec.successMetric}
             <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
             <span class="text-xs font-medium text-text-secondary">
               Claude Code connected • Codebase-aware
+              {#if targetRepoInfo}
+                • <span class="text-accent">{targetRepoInfo.name}</span>
+              {/if}
             </span>
           </div>
           <button
@@ -714,6 +779,68 @@ ${previewSpec.successMetric}
             {showPreview ? 'Hide' : 'Show'} Preview
           </button>
         </div>
+
+        <!-- Target Repo Input (collapsible) -->
+        {#if !targetRepoInfo}
+          <div class="mt-3 p-3 bg-bg-primary/50 rounded-lg border border-border-subtle">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="i-lucide-git-fork w-4 h-4 text-text-muted"></span>
+              <span class="text-xs font-medium text-text-secondary">Target Repository (optional)</span>
+            </div>
+            <div class="flex gap-2">
+              <input
+                type="url"
+                bind:value={targetRepoUrl}
+                placeholder="https://github.com/owner/repo"
+                class="flex-1 px-3 py-2 text-sm bg-bg-secondary border border-border-subtle rounded-md
+                       focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30
+                       placeholder:text-text-muted"
+                disabled={isLoadingRepo}
+              />
+              <button
+                onclick={() => forkAndAnalyzeRepo(targetRepoUrl)}
+                disabled={!targetRepoUrl || isLoadingRepo}
+                class="px-4 py-2 text-sm font-medium bg-accent text-white rounded-md
+                       hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed
+                       flex items-center gap-2"
+              >
+                {#if isLoadingRepo}
+                  <span class="i-lucide-loader-2 w-4 h-4 animate-spin"></span>
+                  Forking...
+                {:else}
+                  <span class="i-lucide-git-fork w-4 h-4"></span>
+                  Fork & Analyze
+                {/if}
+              </button>
+            </div>
+            {#if repoError}
+              <p class="mt-2 text-xs text-red-500">{repoError}</p>
+            {/if}
+            <p class="mt-2 text-xs text-text-muted">
+              Fork a repo to give Claude full context of the target codebase when creating specs.
+            </p>
+          </div>
+        {:else}
+          <!-- Show connected repo info -->
+          <div class="mt-3 p-3 bg-accent/5 rounded-lg border border-accent/20">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="i-lucide-git-fork w-4 h-4 text-accent"></span>
+                <span class="text-sm font-medium text-text-primary">{targetRepoInfo.name}</span>
+                <span class="text-xs text-text-muted">({targetRepoInfo.files.length} files)</span>
+              </div>
+              <button
+                onclick={() => { targetRepoInfo = null; targetRepoUrl = '' }}
+                class="text-xs text-text-muted hover:text-text-secondary"
+              >
+                Change
+              </button>
+            </div>
+            {#if targetRepoInfo.description}
+              <p class="mt-1 text-xs text-text-muted">{targetRepoInfo.description}</p>
+            {/if}
+          </div>
+        {/if}
       {:else}
         <!-- Scripted Mode Progress -->
         <div class="flex items-center gap-1 mb-2">

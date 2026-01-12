@@ -146,6 +146,10 @@ export interface Ticket {
   aiGenerated: boolean
   aiQuestion?: string
 
+  // === GITHUB INTEGRATION ===
+  targetRepo?: string    // Forked repo URL for context
+  originalRepo?: string  // Original repo URL (before fork)
+
   // === PROGRESS ===
   specCompletion: number             // 0-100 percentage
   qualityGate: QualityGate           // Current gate status (from SPARC)

@@ -113,7 +113,7 @@ async function getFromMemory(_key: string): Promise<string | null> {
 }
 
 export const POST: RequestHandler = async ({ request }) => {
-	const { messages, sessionId } = await request.json();
+	const { messages, sessionId, targetRepo } = await request.json();
 
 	// Build conversation history
 	const conversationHistory = messages
@@ -127,13 +127,32 @@ export const POST: RequestHandler = async ({ request }) => {
 		storeInMemory(`specflow/session/${sessionId}`, JSON.stringify(messages.slice(-4)));
 	}
 
-	const prompt = `${SPARC_INTERVIEWER_PROMPT}
+	// Build target repo context if provided
+	let repoContext = '';
+	if (targetRepo) {
+		repoContext = `
+## TARGET REPOSITORY CONTEXT
+You are creating a spec for the repository: **${targetRepo.name}**
+${targetRepo.description ? `Description: ${targetRepo.description}` : ''}
 
+Key files in the repo:
+${targetRepo.files.slice(0, 30).map((f: string) => `- ${f}`).join('\n')}
+
+Consider this codebase structure when:
+- Suggesting where to implement features
+- Understanding existing patterns
+- Identifying integration points
+- Proposing technical requirements
+`;
+	}
+
+	const prompt = `${SPARC_INTERVIEWER_PROMPT}
+${repoContext}
 ## CURRENT CONVERSATION
 ${conversationHistory}
 
 ## YOUR TASK
-Continue the interview naturally. If you have gathered enough information (usually after 8-11 exchanges), generate the structured spec. Otherwise, ask the next relevant question with suggestion chips.`;
+Continue the interview naturally. If you have gathered enough information (usually after 8-11 exchanges), generate the structured spec. Otherwise, ask the next relevant question with suggestion chips.${targetRepo ? ' Reference the target repo structure when relevant.' : ''}`;
 
 	const encoder = new TextEncoder();
 
